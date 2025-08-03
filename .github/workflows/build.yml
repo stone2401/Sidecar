@@ -41,16 +41,19 @@ jobs:
     - name: 检查代码
       uses: actions/checkout@v4
 
+    # 修复点 1：先安装 pnpm
+    - name: 安装 pnpm
+      uses: pnpm/action-setup@v3
+      with:
+        version: 8
+        run_install: false
+
+    # 修复点 2：设置 Node.js 时指定包管理器
     - name: 设置 Node.js
       uses: actions/setup-node@v4
       with:
         node-version: '20'
-        cache: 'npm'
-
-    - name: 安装 pnpm
-      uses: pnpm/action-setup@v2
-      with:
-        version: 8
+        cache: 'pnpm'  # 明确告诉它我们用 pnpm
 
     - name: 设置 Rust
       uses: dtolnay/rust-toolchain@stable
@@ -85,7 +88,7 @@ jobs:
       run: |
         # 创建必要的目录和文件
         mkdir -p empty_dist
-        echo "<!DOCTYPE html><html><head><title>Placeholder</title></head><body><!-- Tauri 动态加载占位文件 --></body></html>" > empty_dist/index.html
+        echo "<!DOCTYPE html><html><head><title>Placeholder</title></head><body></body></html>" > empty_dist/index.html
         
         # 确保 package.json 存在
         if [ ! -f package.json ]; then
@@ -107,9 +110,13 @@ jobs:
         }
         EOF
         fi
-        
-        # 创建 pnpm-lock.yaml 如果不存在
+
+    # 修复点 3：确保锁文件存在
+    - name: 创建锁文件（如果不存在）
+      shell: bash
+      run: |
         if [ ! -f pnpm-lock.yaml ]; then
+          echo "创建 pnpm-lock.yaml..."
           pnpm install --lockfile-only
         fi
 
@@ -123,27 +130,17 @@ jobs:
         echo "pnpm: $(pnpm --version)"
         echo "Rust: $(rustc --version)"
         echo "Tauri CLI: $(pnpm tauri --version)"
-        echo "平台: ${{ matrix.platform }}"
-        echo "目标: ${{ matrix.target }}"
-        
-        echo "=== 项目结构 ==="
-        ls -la
-        
-        echo "=== src-tauri 目录 ==="
-        ls -la src-tauri/ || echo "src-tauri 目录不存在"
 
     - name: 构建应用
       shell: bash
       run: |
         echo "开始构建 Tauri 应用..."
         
-        # 设置环境变量
         if [ "${{ matrix.platform }}" = "ubuntu-22.04" ]; then
           export PKG_CONFIG_PATH="/usr/lib/x86_64-linux-gnu/pkgconfig:/usr/share/pkgconfig"
           export WEBKIT_DISABLE_COMPOSITING_MODE=1
         fi
         
-        # 执行构建
         pnpm tauri build ${{ matrix.args }} --verbose
 
     - name: 创建便携版 (Windows)
@@ -152,39 +149,20 @@ jobs:
       run: |
         echo "创建 Windows 便携版..."
         
-        # 查找构建的 exe 文件
-        exe_file=$(find src-tauri/target -name "*.exe" -path "*/release/*" ! -path "*/deps/*" | head -1)
+        exe_file=$(find src-tauri/target -name "GUI.exe" -path "*/release/*" ! -path "*/deps/*" | head -1)
         
         if [ -n "$exe_file" ]; then
-          echo "找到 exe 文件: $exe_file"
-          
-          # 创建便携版目录
           portable_dir="GUI-${{ matrix.arch }}-portable"
           mkdir -p "$portable_dir"
-          
-          # 复制主程序
           cp "$exe_file" "$portable_dir/"
           
-          # 查找并复制 DLL 文件
+          # 复制 DLL
           dll_dir=$(dirname "$exe_file")
-          find "$dll_dir" -name "*.dll" -exec cp {} "$portable_dir/" \; 2>/dev/null || true
+          find "$dll_dir" -maxdepth 1 -name "*.dll" -exec cp {} "$portable_dir/" \; 2>/dev/null || true
           
-          # 创建启动脚本
-          cat > "$portable_dir/start.bat" << 'EOF'
-        @echo off
-        title GUI Application
-        echo 启动 GUI 应用...
-        echo 可以使用参数: GUI.exe --url https://example.com
-        echo.
-        GUI.exe %*
-        EOF
-          
-          # 创建 zip 包
+          # 创建 zip
+          7z a -tzip "GUI-windows-${{ matrix.arch }}-portable.zip" "./$portable_dir/*" || \
           powershell "Compress-Archive -Path '$portable_dir/*' -DestinationPath 'GUI-windows-${{ matrix.arch }}-portable.zip' -Force"
-          
-          echo "✅ Windows 便携版创建完成"
-        else
-          echo "❌ 未找到 exe 文件"
         fi
 
     - name: 创建便携版 (macOS)
@@ -193,18 +171,11 @@ jobs:
       run: |
         echo "创建 macOS 便携版..."
         
-        # 查找 .app 文件
-        app_file=$(find src-tauri/target -name "*.app" -type d | head -1)
+        app_path=$(find src-tauri/target -name "GUI.app" -type d | head -1)
         
-        if [ -n "$app_file" ]; then
-          echo "找到 app 文件: $app_file"
-          
-          # 创建 dmg 或直接压缩 app
-          zip -r "GUI-macos-${{ matrix.arch }}.zip" "$app_file"
-          
-          echo "✅ macOS 便携版创建完成"
-        else
-          echo "❌ 未找到 app 文件"
+        if [ -n "$app_path" ]; then
+          # 使用 ditto 保留权限
+          ditto -c -k --sequesterRsrc --keepParent "$app_path" "GUI-macos-${{ matrix.arch }}.zip"
         fi
 
     - name: 创建便携版 (Linux)
@@ -213,21 +184,16 @@ jobs:
       run: |
         echo "创建 Linux 便携版..."
         
-        # 查找 AppImage 文件
-        appimage_file=$(find src-tauri/target -name "*.AppImage" | head -1)
+        appimage=$(find src-tauri/target -name "*.AppImage" -type f | head -1)
         
-        if [ -n "$appimage_file" ]; then
-          echo "找到 AppImage 文件: $appimage_file"
-          cp "$appimage_file" "GUI-linux-${{ matrix.arch }}.AppImage"
+        if [ -n "$appimage" ]; then
+          cp "$appimage" "GUI-linux-${{ matrix.arch }}.AppImage"
           chmod +x "GUI-linux-${{ matrix.arch }}.AppImage"
-          echo "✅ Linux 便携版创建完成"
         else
-          echo "❌ 未找到 AppImage 文件"
-          # 尝试查找普通的二进制文件
-          binary_file=$(find src-tauri/target -name "gui" -type f -executable | head -1)
-          if [ -n "$binary_file" ]; then
-            echo "找到二进制文件: $binary_file"
-            cp "$binary_file" "GUI-linux-${{ matrix.arch }}"
+          # 备选：查找二进制
+          binary=$(find src-tauri/target/release -name "gui" -type f -executable | head -1)
+          if [ -n "$binary" ]; then
+            cp "$binary" "GUI-linux-${{ matrix.arch }}"
             chmod +x "GUI-linux-${{ matrix.arch }}"
           fi
         fi
@@ -235,43 +201,30 @@ jobs:
     - name: 收集构建产物
       shell: bash
       run: |
-        echo "=== 构建产物收集 ==="
+        mkdir -p dist
         
-        # 创建产物目录
-        mkdir -p artifacts
+        # 收集便携版
+        find . -maxdepth 1 \( -name "*.zip" -o -name "*.AppImage" -o -name "GUI-linux-*" \) -exec mv {} dist/ \; 2>/dev/null || true
         
-        # 收集各平台的文件
-        find . -maxdepth 1 \( -name "*.zip" -o -name "*.AppImage" -o -name "GUI-*" \) -exec cp {} artifacts/ \;
-        
-        # 收集标准构建产物
+        # 收集安装包
         if [ -d "src-tauri/target/release/bundle" ]; then
-          cp -r src-tauri/target/release/bundle/* artifacts/ 2>/dev/null || true
+          find src-tauri/target/release/bundle -type f \( -name "*.dmg" -o -name "*.app" -o -name "*.AppImage" -o -name "*.deb" -o -name "*.exe" -o -name "*.msi" \) -exec cp {} dist/ \; 2>/dev/null || true
         fi
         
-        # 显示最终产物
-        echo "=== 最终产物 ==="
-        ls -la artifacts/ || echo "没有产物"
+        ls -la dist/ || echo "No artifacts found"
 
     - name: 上传构建产物
       uses: actions/upload-artifact@v4
       with:
         name: GUI-${{ matrix.platform }}-${{ matrix.arch }}
-        path: |
-          artifacts/
-          *.zip
-          *.AppImage
-          GUI-*
+        path: dist/
         retention-days: 30
 
-    - name: 上传到发布 (仅标签推送)
+    - name: 发布到 Release
       uses: softprops/action-gh-release@v1
       if: startsWith(github.ref, 'refs/tags/')
       with:
-        files: |
-          artifacts/*
-          *.zip
-          *.AppImage
-          GUI-*
+        files: dist/*
         draft: false
         prerelease: false
       env:
