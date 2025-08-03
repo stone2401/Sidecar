@@ -18,7 +18,8 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - os: ubuntu-22.04
+          # 使用 Ubuntu 24.04 以获得 webkit2gtk-4.1 支持
+          - os: ubuntu-24.04
             target: x86_64-unknown-linux-gnu
             name: linux-x64
             
@@ -45,26 +46,38 @@ jobs:
       with:
         targets: ${{ matrix.target }}
 
-    # Ubuntu 依赖 - 修复 JavaScriptCore 问题
-    - name: 安装系统依赖 (Ubuntu)
-      if: matrix.os == 'ubuntu-22.04'
+    # Ubuntu 24.04 依赖
+    - name: 安装系统依赖 (Ubuntu 24.04)
+      if: matrix.os == 'ubuntu-24.04'
       run: |
+        echo "=== 系统信息 ==="
+        lsb_release -a
+        
+        echo "=== 更新包列表 ==="
         sudo apt-get update
-        # 安装所有必要的依赖，包括 JavaScriptCore
+        
+        echo "=== 安装 Tauri 依赖 ==="
         sudo apt-get install -y \
-          libwebkit2gtk-4.0-dev \
-          libjavascriptcoregtk-4.0-dev \
+          libwebkit2gtk-4.1-dev \
+          libjavascriptcoregtk-4.1-dev \
           libgtk-3-dev \
           libayatana-appindicator3-dev \
           librsvg2-dev \
           patchelf \
           pkg-config \
-          libssl-dev
+          libssl-dev \
+          build-essential \
+          curl \
+          wget \
+          file
         
-        # 验证 pkg-config 能找到依赖
-        echo "=== 验证依赖 ==="
-        pkg-config --modversion webkit2gtk-4.0 || echo "webkit2gtk-4.0 未找到"
-        pkg-config --modversion javascriptcoregtk-4.0 || echo "javascriptcoregtk-4.0 未找到"
+        echo "=== 验证依赖安装 ==="
+        pkg-config --modversion webkit2gtk-4.1 || echo "webkit2gtk-4.1 未找到"
+        pkg-config --modversion javascriptcoregtk-4.1 || echo "javascriptcoregtk-4.1 未找到"
+        pkg-config --modversion gtk+-3.0 || echo "gtk+-3.0 未找到"
+        
+        echo "=== 显示所有 webkit 相关包 ==="
+        pkg-config --list-all | grep -i webkit || true
 
     - name: Rust 缓存
       uses: Swatinem/rust-cache@v2
@@ -72,25 +85,39 @@ jobs:
         workspaces: './src-tauri -> target'
         key: ${{ matrix.target }}
 
-    # 修复：使用跨平台的准备步骤
+    # 准备构建环境 - Unix
     - name: 准备构建环境 (Unix)
       if: matrix.os != 'windows-latest'
       shell: bash
       run: |
         mkdir -p empty_dist
         echo "<!DOCTYPE html><html><body></body></html>" > empty_dist/index.html
+        
+        echo "=== 项目结构 ==="
+        ls -la
+        if [ -d "src-tauri" ]; then
+          echo "=== src-tauri 内容 ==="
+          ls -la src-tauri/
+        fi
 
+    # 准备构建环境 - Windows
     - name: 准备构建环境 (Windows)
       if: matrix.os == 'windows-latest'
       shell: pwsh
       run: |
-        # PowerShell 版本
         if (-not (Test-Path "empty_dist")) {
           New-Item -ItemType Directory -Path "empty_dist" -Force
         }
         '<!DOCTYPE html><html><body></body></html>' | Out-File -FilePath "empty_dist\index.html" -Encoding UTF8
+        
+        Write-Host "=== 项目结构 ==="
+        Get-ChildItem -Force
+        if (Test-Path "src-tauri") {
+          Write-Host "=== src-tauri 内容 ==="
+          Get-ChildItem "src-tauri" -Force
+        }
 
-    # 构建步骤 - 为 Ubuntu 设置额外环境变量
+    # 构建 - Unix
     - name: 构建 (Unix)
       if: matrix.os != 'windows-latest'
       shell: bash
@@ -98,21 +125,32 @@ jobs:
         cd src-tauri
         
         # Ubuntu 特殊环境变量
-        if [ "${{ matrix.os }}" = "ubuntu-22.04" ]; then
+        if [[ "${{ matrix.os }}" == "ubuntu-24.04" ]]; then
           export WEBKIT_DISABLE_COMPOSITING_MODE=1
           export PKG_CONFIG_PATH="/usr/lib/x86_64-linux-gnu/pkgconfig:/usr/share/pkgconfig:$PKG_CONFIG_PATH"
+          echo "PKG_CONFIG_PATH=$PKG_CONFIG_PATH"
         fi
         
-        cargo build --release --target ${{ matrix.target }}
+        echo "=== 开始构建 ${{ matrix.target }} ==="
+        cargo build --release --target ${{ matrix.target }} --verbose
+        
+        echo "=== 构建完成，检查输出 ==="
+        ls -la target/${{ matrix.target }}/release/
 
+    # 构建 - Windows
     - name: 构建 (Windows)
       if: matrix.os == 'windows-latest'
       shell: pwsh
       run: |
         cd src-tauri
-        cargo build --release --target ${{ matrix.target }}
+        
+        Write-Host "=== 开始构建 ${{ matrix.target }} ==="
+        cargo build --release --target ${{ matrix.target }} --verbose
+        
+        Write-Host "=== 构建完成，检查输出 ==="
+        Get-ChildItem "target\${{ matrix.target }}\release\"
 
-    # 收集二进制文件
+    # 收集二进制文件 - Unix
     - name: 准备上传 (Unix)
       if: matrix.os != 'windows-latest'
       shell: bash
@@ -122,13 +160,25 @@ jobs:
         if [ -f "$BINARY_PATH" ]; then
           cp "$BINARY_PATH" "gui-${{ matrix.name }}"
           chmod +x "gui-${{ matrix.name }}"
-          echo "✅ 二进制文件准备完成: gui-${{ matrix.name }}"
+          
+          # 获取文件信息
+          echo "✅ 二进制文件准备完成"
           ls -lh "gui-${{ matrix.name }}"
+          file "gui-${{ matrix.name }}"
+          
+          # Linux 特定：显示依赖信息
+          if [[ "${{ matrix.os }}" == "ubuntu-24.04" ]]; then
+            echo "=== 动态库依赖 ==="
+            ldd "gui-${{ matrix.name }}" || true
+          fi
         else
           echo "❌ 未找到二进制文件: $BINARY_PATH"
+          echo "target 目录内容："
+          find src-tauri/target -type f -name "gui*" || true
           exit 1
         fi
 
+    # 收集二进制文件 - Windows
     - name: 准备上传 (Windows)
       if: matrix.os == 'windows-latest'
       shell: pwsh
@@ -137,14 +187,25 @@ jobs:
         
         if (Test-Path $binaryPath) {
           Copy-Item $binaryPath "gui-${{ matrix.name }}.exe"
-          Write-Host "✅ 二进制文件准备完成: gui-${{ matrix.name }}.exe"
-          Get-Item "gui-${{ matrix.name }}.exe" | Select-Object Name, Length
+          
+          Write-Host "✅ 二进制文件准备完成"
+          Get-Item "gui-${{ matrix.name }}.exe" | Select-Object Name, Length, LastWriteTime
+          
+          # 检查是否有 DLL 依赖
+          $dllPath = Split-Path $binaryPath -Parent
+          $dlls = Get-ChildItem "$dllPath\*.dll" -ErrorAction SilentlyContinue
+          if ($dlls) {
+            Write-Host "=== DLL 依赖 ==="
+            $dlls | ForEach-Object { Write-Host $_.Name }
+          }
         } else {
           Write-Error "❌ 未找到二进制文件: $binaryPath"
+          Write-Host "target 目录内容："
+          Get-ChildItem "src-tauri\target" -Recurse -Filter "gui*"
           exit 1
         }
 
-    # 上传
+    # 上传单个二进制文件
     - name: 上传二进制文件
       uses: actions/upload-artifact@v4
       with:
@@ -152,7 +213,7 @@ jobs:
         path: gui-${{ matrix.name }}*
         retention-days: 30
 
-  # 合并任务保持不变
+  # 合并所有二进制文件
   merge:
     needs: build
     runs-on: ubuntu-latest
@@ -168,18 +229,55 @@ jobs:
     - name: 显示所有文件
       run: |
         echo "=== 所有二进制文件 ==="
-        ls -lh binaries/
+        ls -lah binaries/
+        
+        echo -e "\n=== 文件类型信息 ==="
+        file binaries/gui-* || true
         
         echo -e "\n=== SHA256 校验和 ==="
         cd binaries
-        sha256sum gui-* || true
+        sha256sum gui-* | tee checksums.txt
 
-    - name: 创建统一压缩包
+    - name: 创建发布包
       run: |
         cd binaries
-        tar -czf ../gui-all-platforms.tar.gz gui-*
+        
+        # 创建带版本号的压缩包
+        VERSION="${GITHUB_REF_NAME:-latest}"
+        tar -czf "../gui-${VERSION}-all-platforms.tar.gz" gui-* checksums.txt
+        
+        # 创建 README
+        cat > ../README-BINARY.md << 'EOF'
+        # GUI 二进制文件
+        
+        ## 文件说明
+        - `gui-linux-x64` - Linux x64 二进制文件
+        - `gui-windows-x64.exe` - Windows x64 可执行文件
+        - `gui-macos-intel` - macOS Intel 二进制文件
+        - `gui-macos-arm64` - macOS Apple Silicon 二进制文件
+        - `checksums.txt` - SHA256 校验和
+        
+        ## 使用方法
+        
+        ### Linux/macOS
+        ```bash
+        chmod +x gui-*
+        ./gui-linux-x64 --url https://example.com
+        ```
+        
+        ### Windows
+        ```cmd
+        gui-windows-x64.exe --url https://example.com
+        ```
+        
+        ## 依赖说明
+        - Linux: 需要 GTK3 和 WebKitGTK
+        - Windows: 需要 WebView2 Runtime
+        - macOS: 无额外依赖
+        EOF
+        
         cd ..
-        ls -lh gui-all-platforms.tar.gz
+        ls -lah gui-*.tar.gz README-BINARY.md
 
     - name: 上传合并包
       uses: actions/upload-artifact@v4
@@ -187,28 +285,66 @@ jobs:
         name: gui-all-platforms
         path: |
           binaries/gui-*
-          gui-all-platforms.tar.gz
+          gui-*.tar.gz
+          README-BINARY.md
         retention-days: 30
 
+    # 创建 Release（仅在打标签时）
     - name: 创建 Release
       if: startsWith(github.ref, 'refs/tags/')
       uses: softprops/action-gh-release@v1
       with:
         files: |
           binaries/gui-*
-          gui-all-platforms.tar.gz
+          gui-*.tar.gz
+          binaries/checksums.txt
         body: |
-          ## 下载说明
+          ## 🎉 GUI ${{ github.ref_name }} 发布
           
-          ### 单独下载
-          - **Windows (64位)**: `gui-windows-x64.exe`
-          - **macOS (Intel)**: `gui-macos-intel`
-          - **macOS (Apple Silicon)**: `gui-macos-arm64`
-          - **Linux (64位)**: `gui-linux-x64`
+          ### 📦 下载文件
           
-          ### 使用方法
+          #### 单独平台文件
+          - **Linux x64**: `gui-linux-x64`
+          - **Windows x64**: `gui-windows-x64.exe`
+          - **macOS Intel**: `gui-macos-intel`
+          - **macOS Apple Silicon**: `gui-macos-arm64`
+          
+          #### 全平台打包
+          - `gui-${{ github.ref_name }}-all-platforms.tar.gz` - 包含所有平台二进制文件
+          
+          ### 🚀 快速开始
+          
           1. 下载对应平台的文件
-          2. 添加执行权限（Unix/macOS）: `chmod +x gui-*`
-          3. 运行: `./gui-* --url https://your-url.com`
+          2. 添加执行权限（Unix/macOS）：
+             ```bash
+             chmod +x gui-*
+             ```
+          3. 运行应用：
+             ```bash
+             # 使用默认 URL
+             ./gui-linux-x64
+             
+             # 指定自定义 URL
+             ./gui-linux-x64 --url https://your-app.com
+             ```
+          
+          ### ✅ 文件校验
+          
+          请使用 `checksums.txt` 验证下载文件的完整性：
+          ```bash
+          sha256sum -c checksums.txt
+          ```
+          
+          ### 📋 系统要求
+          
+          - **Linux**: Ubuntu 20.04+ 或其他支持 GTK3 的发行版
+          - **Windows**: Windows 10 1809+ (需要 WebView2 Runtime)
+          - **macOS**: macOS 10.13+
+          
+          ### 🐛 问题反馈
+          
+          如有问题请在 [Issues](https://github.com/${{ github.repository }}/issues) 中反馈。
+        draft: false
+        prerelease: false
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

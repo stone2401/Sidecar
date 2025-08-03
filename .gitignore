@@ -28,3 +28,5 @@ Thumbs.db
 
 # 但不要忽略锁文件！
 # pnpm-lock.yaml
+
+.claude
