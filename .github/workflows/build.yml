@@ -1,4 +1,4 @@
-name: 构建 GUI 应用
+name: 构建二进制文件
 
 on:
   push:
@@ -9,8 +9,8 @@ on:
   workflow_dispatch:
 
 env:
-  RUST_BACKTRACE: 1
   CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
 
 jobs:
   build:
@@ -18,214 +18,179 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - platform: 'macos-latest'
-            args: ''
-            target: 'x86_64-apple-darwin'
-            arch: 'x64'
-          - platform: 'macos-latest'
-            args: '--target aarch64-apple-darwin'
-            target: 'aarch64-apple-darwin'
-            arch: 'arm64'
-          - platform: 'ubuntu-22.04'
-            args: ''
-            target: 'x86_64-unknown-linux-gnu'
-            arch: 'x64'
-          - platform: 'windows-latest'
-            args: ''
-            target: 'x86_64-pc-windows-msvc'
-            arch: 'x64'
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            binary_name: gui
+            
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            binary_name: gui.exe
+            
+          - os: macos-latest
+            target: x86_64-apple-darwin
+            binary_name: gui
+            
+          - os: macos-latest
+            target: aarch64-apple-darwin
+            binary_name: gui
 
-    runs-on: ${{ matrix.platform }}
-    
+    runs-on: ${{ matrix.os }}
+
     steps:
-    - name: 检查代码
+    - name: 检出代码
       uses: actions/checkout@v4
 
-    # 修复点 1：先安装 pnpm
-    - name: 安装 pnpm
-      uses: pnpm/action-setup@v3
-      with:
-        version: 8
-        run_install: false
-
-    # 修复点 2：设置 Node.js 时指定包管理器
-    - name: 设置 Node.js
-      uses: actions/setup-node@v4
-      with:
-        node-version: '20'
-        cache: 'pnpm'  # 明确告诉它我们用 pnpm
-
-    - name: 设置 Rust
+    - name: 安装 Rust
       uses: dtolnay/rust-toolchain@stable
       with:
         targets: ${{ matrix.target }}
 
-    - name: Rust 缓存
-      uses: swatinem/rust-cache@v2
-      with:
-        workspaces: './src-tauri -> target'
-
     - name: 安装系统依赖 (Ubuntu)
-      if: matrix.platform == 'ubuntu-22.04'
+      if: matrix.os == 'ubuntu-latest'
       run: |
         sudo apt-get update
         sudo apt-get install -y \
           libwebkit2gtk-4.0-dev \
-          libwebkit2gtk-4.1-dev \
-          libappindicator3-dev \
-          librsvg2-dev \
-          patchelf \
           libgtk-3-dev \
           libayatana-appindicator3-dev \
-          build-essential \
-          curl \
-          wget \
-          file \
-          libssl-dev
+          librsvg2-dev
 
+    - name: 设置 Rust 缓存
+      uses: Swatinem/rust-cache@v2
+      with:
+        workspaces: './src-tauri -> target'
+        key: ${{ matrix.target }}
+
+    # 创建必要文件，避免构建失败
     - name: 准备构建环境
       shell: bash
       run: |
-        # 创建必要的目录和文件
+        # 创建空目录以满足 tauri.conf.json 的要求
         mkdir -p empty_dist
-        echo "<!DOCTYPE html><html><head><title>Placeholder</title></head><body></body></html>" > empty_dist/index.html
+        echo "<!DOCTYPE html><html><body></body></html>" > empty_dist/index.html
         
-        # 确保 package.json 存在
-        if [ ! -f package.json ]; then
-          echo "创建基础 package.json"
-          cat > package.json << 'EOF'
-        {
-          "name": "gui",
-          "private": true,
-          "version": "0.1.0",
-          "type": "module",
-          "scripts": {
-            "dev": "tauri dev",
-            "build": "tauri build",
-            "tauri": "tauri"
-          },
-          "devDependencies": {
-            "@tauri-apps/cli": "^2.0.0"
-          }
-        }
-        EOF
-        fi
+        # 显示项目结构用于调试
+        echo "=== 项目结构 ==="
+        ls -la
+        echo "=== src-tauri 目录 ==="
+        ls -la src-tauri/ || echo "src-tauri 不存在"
 
-    # 修复点 3：确保锁文件存在
-    - name: 创建锁文件（如果不存在）
+    # 直接使用 cargo build，不用 tauri build
+    - name: 构建二进制文件
       shell: bash
       run: |
-        if [ ! -f pnpm-lock.yaml ]; then
-          echo "创建 pnpm-lock.yaml..."
-          pnpm install --lockfile-only
-        fi
-
-    - name: 安装依赖
-      run: pnpm install --frozen-lockfile
-
-    - name: 验证环境
-      run: |
-        echo "=== 环境信息 ==="
-        echo "Node: $(node --version)"
-        echo "pnpm: $(pnpm --version)"
-        echo "Rust: $(rustc --version)"
-        echo "Tauri CLI: $(pnpm tauri --version)"
-
-    - name: 构建应用
-      shell: bash
-      run: |
-        echo "开始构建 Tauri 应用..."
+        cd src-tauri
         
-        if [ "${{ matrix.platform }}" = "ubuntu-22.04" ]; then
-          export PKG_CONFIG_PATH="/usr/lib/x86_64-linux-gnu/pkgconfig:/usr/share/pkgconfig"
+        # 设置目标架构
+        export CARGO_BUILD_TARGET="${{ matrix.target }}"
+        
+        # 为 Ubuntu 设置额外环境变量
+        if [ "${{ matrix.os }}" = "ubuntu-latest" ]; then
           export WEBKIT_DISABLE_COMPOSITING_MODE=1
         fi
         
-        pnpm tauri build ${{ matrix.args }} --verbose
+        # 构建 release 版本
+        echo "开始构建 ${{ matrix.target }}..."
+        cargo build --release --target ${{ matrix.target }} --verbose
+        
+        # 显示构建结果
+        echo "=== 构建产物 ==="
+        ls -la target/${{ matrix.target }}/release/
 
-    - name: 创建便携版 (Windows)
-      if: matrix.platform == 'windows-latest'
-      shell: bash
-      run: |
-        echo "创建 Windows 便携版..."
-        
-        exe_file=$(find src-tauri/target -name "GUI.exe" -path "*/release/*" ! -path "*/deps/*" | head -1)
-        
-        if [ -n "$exe_file" ]; then
-          portable_dir="GUI-${{ matrix.arch }}-portable"
-          mkdir -p "$portable_dir"
-          cp "$exe_file" "$portable_dir/"
-          
-          # 复制 DLL
-          dll_dir=$(dirname "$exe_file")
-          find "$dll_dir" -maxdepth 1 -name "*.dll" -exec cp {} "$portable_dir/" \; 2>/dev/null || true
-          
-          # 创建 zip
-          7z a -tzip "GUI-windows-${{ matrix.arch }}-portable.zip" "./$portable_dir/*" || \
-          powershell "Compress-Archive -Path '$portable_dir/*' -DestinationPath 'GUI-windows-${{ matrix.arch }}-portable.zip' -Force"
-        fi
-
-    - name: 创建便携版 (macOS)
-      if: matrix.platform == 'macos-latest'
-      shell: bash
-      run: |
-        echo "创建 macOS 便携版..."
-        
-        app_path=$(find src-tauri/target -name "GUI.app" -type d | head -1)
-        
-        if [ -n "$app_path" ]; then
-          # 使用 ditto 保留权限
-          ditto -c -k --sequesterRsrc --keepParent "$app_path" "GUI-macos-${{ matrix.arch }}.zip"
-        fi
-
-    - name: 创建便携版 (Linux)
-      if: matrix.platform == 'ubuntu-22.04'
-      shell: bash
-      run: |
-        echo "创建 Linux 便携版..."
-        
-        appimage=$(find src-tauri/target -name "*.AppImage" -type f | head -1)
-        
-        if [ -n "$appimage" ]; then
-          cp "$appimage" "GUI-linux-${{ matrix.arch }}.AppImage"
-          chmod +x "GUI-linux-${{ matrix.arch }}.AppImage"
-        else
-          # 备选：查找二进制
-          binary=$(find src-tauri/target/release -name "gui" -type f -executable | head -1)
-          if [ -n "$binary" ]; then
-            cp "$binary" "GUI-linux-${{ matrix.arch }}"
-            chmod +x "GUI-linux-${{ matrix.arch }}"
-          fi
-        fi
-
-    - name: 收集构建产物
+    # 收集二进制文件
+    - name: 收集二进制文件
       shell: bash
       run: |
         mkdir -p dist
         
-        # 收集便携版
-        find . -maxdepth 1 \( -name "*.zip" -o -name "*.AppImage" -o -name "GUI-linux-*" \) -exec mv {} dist/ \; 2>/dev/null || true
+        # 复制二进制文件
+        BINARY_PATH="src-tauri/target/${{ matrix.target }}/release/${{ matrix.binary_name }}"
         
-        # 收集安装包
-        if [ -d "src-tauri/target/release/bundle" ]; then
-          find src-tauri/target/release/bundle -type f \( -name "*.dmg" -o -name "*.app" -o -name "*.AppImage" -o -name "*.deb" -o -name "*.exe" -o -name "*.msi" \) -exec cp {} dist/ \; 2>/dev/null || true
+        if [ -f "$BINARY_PATH" ]; then
+          echo "找到二进制文件: $BINARY_PATH"
+          
+          # 重命名以包含平台信息
+          if [ "${{ matrix.os }}" = "windows-latest" ]; then
+            cp "$BINARY_PATH" "dist/gui-${{ matrix.target }}.exe"
+          else
+            cp "$BINARY_PATH" "dist/gui-${{ matrix.target }}"
+            chmod +x "dist/gui-${{ matrix.target }}"
+          fi
+          
+          # 为 Windows 收集可能的 DLL
+          if [ "${{ matrix.os }}" = "windows-latest" ]; then
+            BINARY_DIR=$(dirname "$BINARY_PATH")
+            find "$BINARY_DIR" -name "*.dll" -exec cp {} dist/ \; 2>/dev/null || true
+          fi
+        else
+          echo "错误：未找到二进制文件"
+          echo "查找路径: $BINARY_PATH"
+          echo "target 目录内容:"
+          find src-tauri/target -type f -name "${{ matrix.binary_name }}" || echo "未找到任何匹配文件"
+          exit 1
         fi
         
-        ls -la dist/ || echo "No artifacts found"
+        # 显示最终产物
+        echo "=== 最终产物 ==="
+        ls -la dist/
 
-    - name: 上传构建产物
+    # 创建压缩包
+    - name: 创建压缩包
+      shell: bash
+      run: |
+        cd dist
+        
+        if [ "${{ matrix.os }}" = "windows-latest" ]; then
+          # Windows 使用 PowerShell 压缩
+          powershell Compress-Archive -Path * -DestinationPath ../gui-${{ matrix.target }}.zip
+        else
+          # Unix 系统使用 tar
+          tar -czf ../gui-${{ matrix.target }}.tar.gz *
+        fi
+        
+        cd ..
+        ls -la *.zip *.tar.gz 2>/dev/null || true
+
+    # 上传原始二进制文件
+    - name: 上传二进制文件
       uses: actions/upload-artifact@v4
       with:
-        name: GUI-${{ matrix.platform }}-${{ matrix.arch }}
-        path: dist/
+        name: gui-binary-${{ matrix.target }}
+        path: dist/*
         retention-days: 30
 
-    - name: 发布到 Release
-      uses: softprops/action-gh-release@v1
-      if: startsWith(github.ref, 'refs/tags/')
+    # 上传压缩包
+    - name: 上传压缩包
+      uses: actions/upload-artifact@v4
       with:
-        files: dist/*
-        draft: false
-        prerelease: false
+        name: gui-archive-${{ matrix.target }}
+        path: |
+          *.zip
+          *.tar.gz
+        retention-days: 30
+
+    # 如果是标签推送，创建 Release
+    - name: 发布到 Release
+      if: startsWith(github.ref, 'refs/tags/')
+      uses: softprops/action-gh-release@v1
+      with:
+        files: |
+          dist/*
+          *.zip
+          *.tar.gz
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # 调试任务 - 当构建失败时运行
+  debug-on-failure:
+    if: failure()
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: 调试信息
+        run: |
+          echo "构建失败，请检查以下内容："
+          echo "1. src-tauri/Cargo.toml 是否存在且配置正确"
+          echo "2. src-tauri/src/main.rs 是否存在"
+          echo "3. src-tauri/tauri.conf.json 中的 frontendDist 路径是否正确"
+          echo "4. 是否有编译错误（查看上面的日志）"
