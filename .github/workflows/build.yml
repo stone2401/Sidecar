@@ -1,177 +1,139 @@
-name: 构建多平台应用
+name: 构建便携版应用
 
 on:
   push:
-    branches: [ main, develop ]
+    branches: [ main, master ]
   pull_request:
-    branches: [ main ]
-  workflow_dispatch: # 允许手动触发
+    branches: [ main, master ]
+  release:
+    types: [ published ]
 
 env:
-  RUST_BACKTRACE: 1
+  CARGO_TERM_COLOR: always
 
 jobs:
   build:
+    name: 构建 ${{ matrix.platform }}
+    runs-on: ${{ matrix.os }}
     strategy:
-      fail-fast: false # 让其他平台继续构建，即使某个平台失败
+      fail-fast: false
       matrix:
-        settings:
-          - platform: 'macos-latest' # Intel
-            args: ''
-            target: ''
-          - platform: 'macos-latest' # Apple Silicon
-            args: '--target aarch64-apple-darwin'
+        include:
+          - platform: 'windows-x86_64'
+            os: 'windows-latest'
+            target: 'x86_64-pc-windows-msvc'
+            arch: 'x64'
+          - platform: 'macos-x86_64'
+            os: 'macos-latest'
+            target: 'x86_64-apple-darwin'
+            arch: 'x64'
+          - platform: 'macos-aarch64'
+            os: 'macos-latest'
             target: 'aarch64-apple-darwin'
-          - platform: 'ubuntu-22.04'
-            args: ''
-            target: ''
-          - platform: 'windows-latest'
-            args: ''
-            target: ''
+            arch: 'arm64'
+          - platform: 'linux-x86_64'
+            os: 'ubuntu-latest'
+            target: 'x86_64-unknown-linux-gnu'
+            arch: 'x64'
 
-    runs-on: ${{ matrix.settings.platform }}
-    
     steps:
-    - name: 检查代码
-      uses: actions/checkout@v4
+      - name: 检出代码
+        uses: actions/checkout@v4
 
-    - name: 设置 Node.js
-      uses: actions/setup-node@v4
-      with:
-        node-version: '20'
+      - name: 设置 Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'pnpm'
 
-    - name: 安装 pnpm
-      uses: pnpm/action-setup@v2
-      with:
-        version: 8
+      - name: 安装 pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: latest
 
-    - name: 设置 Rust
-      uses: dtolnay/rust-toolchain@stable
-      with:
-        targets: ${{ matrix.settings.target }}
+      - name: 设置 Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
 
-    - name: 安装系统依赖 (Ubuntu)
-      if: matrix.settings.platform == 'ubuntu-22.04'
-      run: |
-        sudo apt-get update
-        sudo apt-get install -y \
-          libwebkit2gtk-4.0-dev \
-          libwebkit2gtk-4.1-dev \
-          libappindicator3-dev \
-          librsvg2-dev \
-          patchelf \
-          libgtk-3-dev \
-          libayatana-appindicator3-dev
+      - name: 安装 Linux 依赖
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
 
-    # 调试步骤：检查文件结构
-    - name: 调试 - 检查项目结构
-      run: |
-        echo "=== 项目根目录 ==="
-        ls -la
-        echo "=== src-tauri 目录 ==="
-        ls -la src-tauri/ || echo "src-tauri 目录不存在"
-        echo "=== package.json 内容 ==="
-        cat package.json || echo "package.json 不存在"
-        echo "=== tauri.conf.json 内容 ==="
-        cat src-tauri/tauri.conf.json || echo "tauri.conf.json 不存在"
+      - name: Rust 缓存
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: './src-tauri -> target'
 
-    # 创建必要的目录和文件
-    - name: 创建必要文件
-      run: |
-        # 创建 empty_dist 目录
-        mkdir -p empty_dist
-        echo "<!-- 占位文件 -->" > empty_dist/index.html
-        
-        # 检查 package.json 是否有必要的脚本
-        if [ ! -f package.json ]; then
-          echo "创建基础 package.json"
-          cat > package.json << 'EOF'
-        {
-          "name": "gui",
-          "version": "0.1.0",
-          "description": "Tauri GUI Application",
-          "main": "index.js",
-          "scripts": {
-            "tauri": "tauri",
-            "dev": "tauri dev",
-            "build": "tauri build"
-          },
-          "devDependencies": {
-            "@tauri-apps/cli": "^2.0.0"
-          }
-        }
-        EOF
-        fi
+      - name: 安装前端依赖
+        run: pnpm install
 
-    - name: Rust 缓存
-      uses: swatinem/rust-cache@v2
-      with:
-        workspaces: './src-tauri -> target'
+      - name: 构建前端
+        run: pnpm run build
+        if: hashFiles('package.json') != ''
 
-    - name: 安装前端依赖
-      run: |
-        echo "安装前端依赖..."
-        pnpm install --frozen-lockfile || pnpm install
+      - name: 构建 Tauri 应用
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tagName: app-v__VERSION__
+          releaseName: 'App v__VERSION__'
+          releaseBody: '查看资源以下载此版本的安装程序。'
+          releaseDraft: true
+          prerelease: false
+          args: --target ${{ matrix.target }}
 
-    # 调试步骤：检查 Tauri 配置
-    - name: 调试 - 验证 Tauri 配置
-      run: |
-        echo "=== 验证 Tauri CLI ==="
-        pnpm tauri --version || npm install -g @tauri-apps/cli@latest
-        
-        echo "=== 验证 Tauri 配置 ==="
-        pnpm tauri info || echo "tauri info 失败"
+      - name: 上传构建产物
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.platform }}-portable
+          path: |
+            src-tauri/target/${{ matrix.target }}/release/bundle/
+            !src-tauri/target/${{ matrix.target }}/release/bundle/**/.*
+          retention-days: 30
 
-    - name: 构建应用
-      run: |
-        echo "开始构建 Tauri 应用..."
-        echo "平台: ${{ matrix.settings.platform }}"
-        echo "参数: ${{ matrix.settings.args }}"
-        
-        if [ "${{ matrix.settings.platform }}" = "ubuntu-22.04" ]; then
-          echo "为 Linux 设置额外环境变量..."
-          export PKG_CONFIG_PATH="/usr/lib/x86_64-linux-gnu/pkgconfig:/usr/share/pkgconfig"
-          export WEBKIT_DISABLE_COMPOSITING_MODE=1
-        fi
-        
-        pnpm tauri build ${{ matrix.settings.args }} --verbose
+  # 创建发布版本（仅在推送到主分支时）
+  release:
+    if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master')
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
 
-    # 调试步骤：检查构建输出
-    - name: 调试 - 检查构建产物
-      run: |
-        echo "=== 检查构建产物 ==="
-        find src-tauri/target -name "*.exe" -o -name "*.app" -o -name "*.AppImage" -o -name "*.deb" -o -name "*.dmg" -o -name "*.msi" || echo "没找到构建产物"
-        
-        echo "=== src-tauri/target 目录结构 ==="
-        ls -la src-tauri/target/ || echo "target 目录不存在"
-        
-        if [ -d "src-tauri/target/release" ]; then
-          echo "=== release 目录结构 ==="
-          ls -la src-tauri/target/release/
-        fi
-        
-        if [ -d "src-tauri/target/release/bundle" ]; then
-          echo "=== bundle 目录结构 ==="
-          find src-tauri/target/release/bundle -type f
-        fi
+      - name: 下载所有构建产物
+        uses: actions/download-artifact@v4
+        with:
+          path: ./artifacts
 
-    - name: 上传构建产物
-      uses: actions/upload-artifact@v4
-      if: always() # 即使前面的步骤失败，也尝试上传
-      with:
-        name: tauri-app-${{ matrix.settings.platform }}-${{ matrix.settings.target || 'default' }}
-        path: |
-          src-tauri/target/release/bundle/
-          src-tauri/target/*/release/bundle/
-        retention-days: 7
+      - name: 显示下载的文件
+        run: ls -la ./artifacts/
 
-    # 上传调试日志
-    - name: 上传构建日志
-      uses: actions/upload-artifact@v4
-      if: failure()
-      with:
-        name: build-logs-${{ matrix.settings.platform }}
-        path: |
-          src-tauri/target/release/build/
-          ~/.cargo/registry/
-        retention-days: 3
+      - name: 创建发布版本
+        if: github.event_name != 'pull_request'
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: v${{ github.run_number }}
+          name: Release v${{ github.run_number }}
+          body: |
+            ## 🚀 新版本发布
+            
+            ### 📦 下载链接
+            - **Windows (x64)**: 下载 `windows-x86_64-portable` 文件
+            - **macOS (Intel)**: 下载 `macos-x86_64-portable` 文件  
+            - **macOS (Apple Silicon)**: 下载 `macos-aarch64-portable` 文件
+            - **Linux (x64)**: 下载 `linux-x86_64-portable` 文件
+            
+            ### 📋 更新内容
+            ${{ github.event.head_commit.message }}
+            
+            构建时间: ${{ github.event.head_commit.timestamp }}
+          files: |
+            ./artifacts/**/*
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
