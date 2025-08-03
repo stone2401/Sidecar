@@ -28,9 +28,9 @@ elif [[ "$OSTYPE" == "darwin"* ]]; then
     echo "✅ 构建完成: gui-macos-$ARCH"
 else
     cp target/release/gui ../dist/gui-linux
-    chmod +x ../dist/gui-linux
+    chmod +x ../gui-linux
     echo "✅ 构建完成: gui-linux"
 fi
 
 cd ..
-ls -lh dist
+ls -lh dist/gui-*

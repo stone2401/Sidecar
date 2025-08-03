@@ -45,15 +45,26 @@ jobs:
       with:
         targets: ${{ matrix.target }}
 
+    # Ubuntu 依赖 - 修复 JavaScriptCore 问题
     - name: 安装系统依赖 (Ubuntu)
       if: matrix.os == 'ubuntu-22.04'
       run: |
         sudo apt-get update
+        # 安装所有必要的依赖，包括 JavaScriptCore
         sudo apt-get install -y \
           libwebkit2gtk-4.0-dev \
+          libjavascriptcoregtk-4.0-dev \
           libgtk-3-dev \
           libayatana-appindicator3-dev \
-          librsvg2-dev
+          librsvg2-dev \
+          patchelf \
+          pkg-config \
+          libssl-dev
+        
+        # 验证 pkg-config 能找到依赖
+        echo "=== 验证依赖 ==="
+        pkg-config --modversion webkit2gtk-4.0 || echo "webkit2gtk-4.0 未找到"
+        pkg-config --modversion javascriptcoregtk-4.0 || echo "javascriptcoregtk-4.0 未找到"
 
     - name: Rust 缓存
       uses: Swatinem/rust-cache@v2
@@ -61,39 +72,56 @@ jobs:
         workspaces: './src-tauri -> target'
         key: ${{ matrix.target }}
 
-    - name: 准备构建环境
+    # 修复：使用跨平台的准备步骤
+    - name: 准备构建环境 (Unix)
+      if: matrix.os != 'windows-latest'
+      shell: bash
       run: |
         mkdir -p empty_dist
         echo "<!DOCTYPE html><html><body></body></html>" > empty_dist/index.html
 
-    - name: 构建
+    - name: 准备构建环境 (Windows)
+      if: matrix.os == 'windows-latest'
+      shell: pwsh
+      run: |
+        # PowerShell 版本
+        if (-not (Test-Path "empty_dist")) {
+          New-Item -ItemType Directory -Path "empty_dist" -Force
+        }
+        '<!DOCTYPE html><html><body></body></html>' | Out-File -FilePath "empty_dist\index.html" -Encoding UTF8
+
+    # 构建步骤 - 为 Ubuntu 设置额外环境变量
+    - name: 构建 (Unix)
+      if: matrix.os != 'windows-latest'
+      shell: bash
+      run: |
+        cd src-tauri
+        
+        # Ubuntu 特殊环境变量
+        if [ "${{ matrix.os }}" = "ubuntu-22.04" ]; then
+          export WEBKIT_DISABLE_COMPOSITING_MODE=1
+          export PKG_CONFIG_PATH="/usr/lib/x86_64-linux-gnu/pkgconfig:/usr/share/pkgconfig:$PKG_CONFIG_PATH"
+        fi
+        
+        cargo build --release --target ${{ matrix.target }}
+
+    - name: 构建 (Windows)
+      if: matrix.os == 'windows-latest'
+      shell: pwsh
       run: |
         cd src-tauri
         cargo build --release --target ${{ matrix.target }}
 
-    # 只收集二进制文件，不创建额外的目录或压缩包
-    - name: 准备上传
+    # 收集二进制文件
+    - name: 准备上传 (Unix)
+      if: matrix.os != 'windows-latest'
       shell: bash
       run: |
-        # 确定二进制文件名
-        if [ "${{ matrix.os }}" = "windows-latest" ]; then
-          BINARY_NAME="gui.exe"
-        else
-          BINARY_NAME="gui"
-        fi
-        
-        # 找到并重命名二进制文件
-        BINARY_PATH="src-tauri/target/${{ matrix.target }}/release/$BINARY_NAME"
+        BINARY_PATH="src-tauri/target/${{ matrix.target }}/release/gui"
         
         if [ -f "$BINARY_PATH" ]; then
-          # 直接复制到根目录，使用平台友好的名称
           cp "$BINARY_PATH" "gui-${{ matrix.name }}"
-          
-          # 确保可执行权限（Unix 系统）
-          if [ "${{ matrix.os }}" != "windows-latest" ]; then
-            chmod +x "gui-${{ matrix.name }}"
-          fi
-          
+          chmod +x "gui-${{ matrix.name }}"
           echo "✅ 二进制文件准备完成: gui-${{ matrix.name }}"
           ls -lh "gui-${{ matrix.name }}"
         else
@@ -101,15 +129,30 @@ jobs:
           exit 1
         fi
 
-    # 直接上传单个二进制文件
+    - name: 准备上传 (Windows)
+      if: matrix.os == 'windows-latest'
+      shell: pwsh
+      run: |
+        $binaryPath = "src-tauri\target\${{ matrix.target }}\release\gui.exe"
+        
+        if (Test-Path $binaryPath) {
+          Copy-Item $binaryPath "gui-${{ matrix.name }}.exe"
+          Write-Host "✅ 二进制文件准备完成: gui-${{ matrix.name }}.exe"
+          Get-Item "gui-${{ matrix.name }}.exe" | Select-Object Name, Length
+        } else {
+          Write-Error "❌ 未找到二进制文件: $binaryPath"
+          exit 1
+        }
+
+    # 上传
     - name: 上传二进制文件
       uses: actions/upload-artifact@v4
       with:
         name: gui-${{ matrix.name }}
-        path: gui-${{ matrix.name }}
+        path: gui-${{ matrix.name }}*
         retention-days: 30
 
-  # 合并所有二进制文件到一个 artifact
+  # 合并任务保持不变
   merge:
     needs: build
     runs-on: ubuntu-latest
@@ -127,14 +170,9 @@ jobs:
         echo "=== 所有二进制文件 ==="
         ls -lh binaries/
         
-        # 计算 SHA256
         echo -e "\n=== SHA256 校验和 ==="
         cd binaries
-        for file in gui-*; do
-          if [ -f "$file" ]; then
-            sha256sum "$file"
-          fi
-        done
+        sha256sum gui-* || true
 
     - name: 创建统一压缩包
       run: |
@@ -152,7 +190,6 @@ jobs:
           gui-all-platforms.tar.gz
         retention-days: 30
 
-    # 如果是标签，创建 Release
     - name: 创建 Release
       if: startsWith(github.ref, 'refs/tags/')
       uses: softprops/action-gh-release@v1
@@ -173,8 +210,5 @@ jobs:
           1. 下载对应平台的文件
           2. 添加执行权限（Unix/macOS）: `chmod +x gui-*`
           3. 运行: `./gui-* --url https://your-url.com`
-          
-          ### 所有平台打包下载
-          - `gui-all-platforms.tar.gz` - 包含所有平台的二进制文件
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
