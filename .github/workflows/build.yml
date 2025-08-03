@@ -18,21 +18,21 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - os: ubuntu-latest
+          - os: ubuntu-22.04
             target: x86_64-unknown-linux-gnu
-            binary_name: gui
+            name: linux-x64
             
           - os: windows-latest
             target: x86_64-pc-windows-msvc
-            binary_name: gui.exe
+            name: windows-x64
             
           - os: macos-latest
             target: x86_64-apple-darwin
-            binary_name: gui
+            name: macos-intel
             
           - os: macos-latest
             target: aarch64-apple-darwin
-            binary_name: gui
+            name: macos-arm64
 
     runs-on: ${{ matrix.os }}
 
@@ -46,7 +46,7 @@ jobs:
         targets: ${{ matrix.target }}
 
     - name: 安装系统依赖 (Ubuntu)
-      if: matrix.os == 'ubuntu-latest'
+      if: matrix.os == 'ubuntu-22.04'
       run: |
         sudo apt-get update
         sudo apt-get install -y \
@@ -55,142 +55,126 @@ jobs:
           libayatana-appindicator3-dev \
           librsvg2-dev
 
-    - name: 设置 Rust 缓存
+    - name: Rust 缓存
       uses: Swatinem/rust-cache@v2
       with:
         workspaces: './src-tauri -> target'
         key: ${{ matrix.target }}
 
-    # 创建必要文件，避免构建失败
     - name: 准备构建环境
-      shell: bash
       run: |
-        # 创建空目录以满足 tauri.conf.json 的要求
         mkdir -p empty_dist
         echo "<!DOCTYPE html><html><body></body></html>" > empty_dist/index.html
-        
-        # 显示项目结构用于调试
-        echo "=== 项目结构 ==="
-        ls -la
-        echo "=== src-tauri 目录 ==="
-        ls -la src-tauri/ || echo "src-tauri 不存在"
 
-    # 直接使用 cargo build，不用 tauri build
-    - name: 构建二进制文件
-      shell: bash
+    - name: 构建
       run: |
         cd src-tauri
-        
-        # 设置目标架构
-        export CARGO_BUILD_TARGET="${{ matrix.target }}"
-        
-        # 为 Ubuntu 设置额外环境变量
-        if [ "${{ matrix.os }}" = "ubuntu-latest" ]; then
-          export WEBKIT_DISABLE_COMPOSITING_MODE=1
-        fi
-        
-        # 构建 release 版本
-        echo "开始构建 ${{ matrix.target }}..."
-        cargo build --release --target ${{ matrix.target }} --verbose
-        
-        # 显示构建结果
-        echo "=== 构建产物 ==="
-        ls -la target/${{ matrix.target }}/release/
+        cargo build --release --target ${{ matrix.target }}
 
-    # 收集二进制文件
-    - name: 收集二进制文件
+    # 只收集二进制文件，不创建额外的目录或压缩包
+    - name: 准备上传
       shell: bash
       run: |
-        mkdir -p dist
+        # 确定二进制文件名
+        if [ "${{ matrix.os }}" = "windows-latest" ]; then
+          BINARY_NAME="gui.exe"
+        else
+          BINARY_NAME="gui"
+        fi
         
-        # 复制二进制文件
-        BINARY_PATH="src-tauri/target/${{ matrix.target }}/release/${{ matrix.binary_name }}"
+        # 找到并重命名二进制文件
+        BINARY_PATH="src-tauri/target/${{ matrix.target }}/release/$BINARY_NAME"
         
         if [ -f "$BINARY_PATH" ]; then
-          echo "找到二进制文件: $BINARY_PATH"
+          # 直接复制到根目录，使用平台友好的名称
+          cp "$BINARY_PATH" "gui-${{ matrix.name }}"
           
-          # 重命名以包含平台信息
-          if [ "${{ matrix.os }}" = "windows-latest" ]; then
-            cp "$BINARY_PATH" "dist/gui-${{ matrix.target }}.exe"
-          else
-            cp "$BINARY_PATH" "dist/gui-${{ matrix.target }}"
-            chmod +x "dist/gui-${{ matrix.target }}"
+          # 确保可执行权限（Unix 系统）
+          if [ "${{ matrix.os }}" != "windows-latest" ]; then
+            chmod +x "gui-${{ matrix.name }}"
           fi
           
-          # 为 Windows 收集可能的 DLL
-          if [ "${{ matrix.os }}" = "windows-latest" ]; then
-            BINARY_DIR=$(dirname "$BINARY_PATH")
-            find "$BINARY_DIR" -name "*.dll" -exec cp {} dist/ \; 2>/dev/null || true
-          fi
+          echo "✅ 二进制文件准备完成: gui-${{ matrix.name }}"
+          ls -lh "gui-${{ matrix.name }}"
         else
-          echo "错误：未找到二进制文件"
-          echo "查找路径: $BINARY_PATH"
-          echo "target 目录内容:"
-          find src-tauri/target -type f -name "${{ matrix.binary_name }}" || echo "未找到任何匹配文件"
+          echo "❌ 未找到二进制文件: $BINARY_PATH"
           exit 1
         fi
-        
-        # 显示最终产物
-        echo "=== 最终产物 ==="
-        ls -la dist/
 
-    # 创建压缩包
-    - name: 创建压缩包
-      shell: bash
-      run: |
-        cd dist
-        
-        if [ "${{ matrix.os }}" = "windows-latest" ]; then
-          # Windows 使用 PowerShell 压缩
-          powershell Compress-Archive -Path * -DestinationPath ../gui-${{ matrix.target }}.zip
-        else
-          # Unix 系统使用 tar
-          tar -czf ../gui-${{ matrix.target }}.tar.gz *
-        fi
-        
-        cd ..
-        ls -la *.zip *.tar.gz 2>/dev/null || true
-
-    # 上传原始二进制文件
+    # 直接上传单个二进制文件
     - name: 上传二进制文件
       uses: actions/upload-artifact@v4
       with:
-        name: gui-binary-${{ matrix.target }}
-        path: dist/*
+        name: gui-${{ matrix.name }}
+        path: gui-${{ matrix.name }}
         retention-days: 30
 
-    # 上传压缩包
-    - name: 上传压缩包
+  # 合并所有二进制文件到一个 artifact
+  merge:
+    needs: build
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: 下载所有二进制文件
+      uses: actions/download-artifact@v4
+      with:
+        path: binaries
+        pattern: gui-*
+        merge-multiple: true
+
+    - name: 显示所有文件
+      run: |
+        echo "=== 所有二进制文件 ==="
+        ls -lh binaries/
+        
+        # 计算 SHA256
+        echo -e "\n=== SHA256 校验和 ==="
+        cd binaries
+        for file in gui-*; do
+          if [ -f "$file" ]; then
+            sha256sum "$file"
+          fi
+        done
+
+    - name: 创建统一压缩包
+      run: |
+        cd binaries
+        tar -czf ../gui-all-platforms.tar.gz gui-*
+        cd ..
+        ls -lh gui-all-platforms.tar.gz
+
+    - name: 上传合并包
       uses: actions/upload-artifact@v4
       with:
-        name: gui-archive-${{ matrix.target }}
+        name: gui-all-platforms
         path: |
-          *.zip
-          *.tar.gz
+          binaries/gui-*
+          gui-all-platforms.tar.gz
         retention-days: 30
 
-    # 如果是标签推送，创建 Release
-    - name: 发布到 Release
+    # 如果是标签，创建 Release
+    - name: 创建 Release
       if: startsWith(github.ref, 'refs/tags/')
       uses: softprops/action-gh-release@v1
       with:
         files: |
-          dist/*
-          *.zip
-          *.tar.gz
+          binaries/gui-*
+          gui-all-platforms.tar.gz
+        body: |
+          ## 下载说明
+          
+          ### 单独下载
+          - **Windows (64位)**: `gui-windows-x64.exe`
+          - **macOS (Intel)**: `gui-macos-intel`
+          - **macOS (Apple Silicon)**: `gui-macos-arm64`
+          - **Linux (64位)**: `gui-linux-x64`
+          
+          ### 使用方法
+          1. 下载对应平台的文件
+          2. 添加执行权限（Unix/macOS）: `chmod +x gui-*`
+          3. 运行: `./gui-* --url https://your-url.com`
+          
+          ### 所有平台打包下载
+          - `gui-all-platforms.tar.gz` - 包含所有平台的二进制文件
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-  # 调试任务 - 当构建失败时运行
-  debug-on-failure:
-    if: failure()
-    needs: build
-    runs-on: ubuntu-latest
-    steps:
-      - name: 调试信息
-        run: |
-          echo "构建失败，请检查以下内容："
-          echo "1. src-tauri/Cargo.toml 是否存在且配置正确"
-          echo "2. src-tauri/src/main.rs 是否存在"
-          echo "3. src-tauri/tauri.conf.json 中的 frontendDist 路径是否正确"
-          echo "4. 是否有编译错误（查看上面的日志）"
