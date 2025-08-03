@@ -1,0 +1,50 @@
+name: 跨平台构建
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        platform: [macos-latest, ubuntu-22.04, windows-latest]
+
+    runs-on: ${{ matrix.platform }}
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: 安装 Rust
+      uses: dtolnay/rust-toolchain@stable
+
+    - name: 安装 Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: '20'
+
+    - name: 安装 pnpm
+      uses: pnpm/action-setup@v2
+      with:
+        version: 8
+
+    - name: 安装依赖 (Ubuntu)
+      if: matrix.platform == 'ubuntu-22.04'
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y libgtk-3-dev libwebkit2gtk-4.0-dev librsvg2-dev
+
+    - name: 安装前端依赖
+      run: pnpm install
+
+    - name: 构建 Tauri 应用
+      run: pnpm tauri build
+
+    - name: 上传构建产物
+      uses: actions/upload-artifact@v4
+      with:
+        name: tauri-app-${{ matrix.platform }}
+        path: |
+          src-tauri/target/release/bundle/
