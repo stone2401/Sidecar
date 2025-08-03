@@ -2,12 +2,12 @@
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "gui",
   "version": "0.1.0",
-  "identifier": "com.gui.app",
+  "identifier": "com.gui",
   "build": {
     "beforeDevCommand": "",
     "devUrl": "http://localhost:1420",
     "beforeBuildCommand": "",
-    "frontendDist": "../empty_dist"
+    "frontendDist": "empty_dist"
   },
   "app": {
     "withGlobalTauri": true,
