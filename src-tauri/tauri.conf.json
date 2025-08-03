@@ -17,7 +17,7 @@
   },
   "bundle": {
     "active": true,
-    "targets": "all",
+    "targets": [],
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",
@@ -31,6 +31,7 @@
     "category": "DeveloperTool",
     "shortDescription": "",
     "longDescription": "",
+    "createUpdaterArtifacts": false,
     "macOS": {
       "frameworks": [],
       "minimumSystemVersion": "",
@@ -39,7 +40,8 @@
     "windows": {
       "certificateThumbprint": null,
       "digestAlgorithm": "sha256",
-      "timestampUrl": ""
+      "timestampUrl": "",
+      "allowDowngrades": true
     }
   }
 }

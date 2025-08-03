@@ -4,10 +4,10 @@
 
 本项目已配置 GitHub Actions 自动构建工作流，支持以下平台：
 
-- **Windows (x64)** - `x86_64-pc-windows-msvc`
-- **macOS (Intel)** - `x86_64-apple-darwin`  
-- **macOS (Apple Silicon)** - `aarch64-apple-darwin`
-- **Linux (x64)** - `x86_64-unknown-linux-gnu`
+- **Windows (x64)** - 便携版 `.exe` 可执行文件
+- **macOS (Intel)** - 便携版 `.app` 应用包
+- **macOS (Apple Silicon)** - 原生 ARM64 便携版 `.app`
+- **Linux (x64)** - 便携版可执行文件
 
 ### 触发构建
 
@@ -21,10 +21,10 @@
 
 每次构建会生成以下便携版应用：
 
-- `windows-x86_64-portable` - Windows 可执行文件和安装包
-- `macos-x86_64-portable` - macOS Intel 版本应用包
-- `macos-aarch64-portable` - macOS Apple Silicon 版本应用包  
-- `linux-x86_64-portable` - Linux 可执行文件和包
+- `windows-x86_64-portable` - Windows 便携版可执行文件 (.exe)
+- `macos-x86_64-portable` - macOS Intel 便携版应用 (.app)
+- `macos-aarch64-portable` - macOS Apple Silicon 便携版应用 (.app)
+- `linux-x86_64-portable` - Linux 便携版可执行文件
 
 ## 🛠️ 本地构建
 
@@ -73,16 +73,16 @@ pnpm run tauri build -- --target x86_64-unknown-linux-gnu
 
 ## 📁 构建输出
 
-构建完成后，可执行文件和安装包位于：
+构建完成后，便携版可执行文件位于：
 
 ```
-src-tauri/target/[target]/release/bundle/
-├── deb/           # Linux .deb 包
-├── dmg/           # macOS .dmg 文件
-├── msi/           # Windows .msi 安装包
-├── nsis/          # Windows NSIS 安装程序
-└── appimage/      # Linux AppImage
+src-tauri/target/[target]/release/
+├── gui.exe        # Windows 便携版可执行文件
+├── gui.app/       # macOS 便携版应用包
+└── gui            # Linux 便携版可执行文件
 ```
+
+**注意**: 便携版应用无需安装，可直接运行。
 
 ## 🔧 自定义配置
 
