@@ -15,22 +15,22 @@ cargo build --release
 
 # 复制二进制文件
 if [[ "$OSTYPE" == "msys" || "$OSTYPE" == "win32" ]]; then
-    cp target/release/gui.exe ../dist/gui-windows.exe
-    echo "✅ 构建完成: gui-windows.exe"
+    cp target/release/sidecar.exe ../dist/sidecar-windows.exe
+    echo "✅ 构建完成: sidecar-windows.exe"
 elif [[ "$OSTYPE" == "darwin"* ]]; then
     ARCH=$(uname -m)
     if [ "$ARCH" = "arm64" ]; then
-        cp target/release/gui ../dist/gui-macos-arm64
+        cp target/release/sidecar ../dist/sidecar-macos-arm64
     else
-        cp target/release/gui ../dist/gui-macos-intel
+        cp target/release/sidecar ../dist/sidecar-macos-intel
     fi
-    chmod +x ../dist/gui-macos-*
-    echo "✅ 构建完成: gui-macos-$ARCH"
+    chmod +x ../dist/sidecar-macos-*
+    echo "✅ 构建完成: sidecar-macos-$ARCH"
 else
-    cp target/release/gui ../dist/gui-linux
-    chmod +x ../gui-linux
-    echo "✅ 构建完成: gui-linux"
+    cp target/release/sidecar ../dist/sidecar-linux
+    chmod +x ../dist/sidecar-linux
+    echo "✅ 构建完成: sidecar-linux"
 fi
 
 cd ..
-ls -lh dist/gui-*
+ls -lh dist/sidecar-*
