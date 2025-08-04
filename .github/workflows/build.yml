@@ -14,7 +14,7 @@ env:
 
 jobs:
   # ===================================================================
-  # 步骤 1: 构建独立的二进制文件 (此部分无变化)
+  # 步骤 1: 构建 (无变化)
   # ===================================================================
   build:
     strategy:
@@ -43,9 +43,7 @@ jobs:
       with: { targets: "${{ matrix.target }}" }
     - name: 安装系统依赖 (Ubuntu)
       if: matrix.os == 'ubuntu-24.04'
-      run: |
-        sudo apt-get update
-        sudo apt-get install -y libwebkit2gtk-4.1-dev libjavascriptcoregtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev librsvg2-dev build-essential
+      run: sudo apt-get update && sudo apt-get install -y libwebkit2gtk-4.1-dev libjavascriptcoregtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev librsvg2-dev build-essential
     - name: Rust 缓存
       uses: Swatinem/rust-cache@v2
       with: { workspaces: './src-tauri -> target', key: "${{ matrix.target }}" }
@@ -73,7 +71,7 @@ jobs:
       with: { name: "sidecar-binary-${{ matrix.name }}", path: ./artifact/, retention-days: 7 }
 
   # ===================================================================
-  # 步骤 2: (已修正) 合并二进制文件并准备发布包
+  # 步骤 2: (已彻底修正) 合并二进制文件并准备发布包
   # ===================================================================
   merge_and_release:
     needs: build
@@ -85,34 +83,36 @@ jobs:
 
     - name: 下载所有构建好的二进制文件
       uses: actions/download-artifact@v4
-      with: { path: all-binaries/ } # 只指定根目录
+      with: { path: all-binaries/ }
 
     - name: 整理文件并创建发布包
       id: prep_release
       run: |
-        # 1. 创建一个用于存放【零散文件】的干净目录
+        # 1. 创建用于存放【零散文件】的目录
         mkdir -p release_files
         
-        # 2. ✅ 【核心修正】使用 find 命令，忽略目录层级，直接将所有二进制文件移动到准备区
+        # 2. 使用 find 将所有二进制文件移动到【零散文件】目录
         find ./all-binaries -type f -exec mv {} ./release_files/ \;
         
         # 3. 在【零散文件】目录内生成校验和
         cd release_files
         sha256sum sidecar-* > checksums.txt
-        cd ..
-        
-        # 4. 创建一个用于存放【最终成品】的目录
-        mkdir -p final_package
-        
-        # 5. 将【零散文件】目录里的所有东西，都移动到【最终成品】目录
-        mv release_files/* final_package/
-        
-        # 6. 创建包含所有零散文件的压缩包，并直接放在【最终成品】目录里
+        cd .. # 返回工作区根目录
+
+        # 4. ✅ 【核心修正】创建压缩包，但【输出在当前目录】，【源头是 release_files】
         VERSION="${GITHUB_REF_NAME:-latest}"
         CLEAN_VERSION=$(echo "$VERSION" | sed 's/^v//')
-        tar -czf "final_package/sidecar-${CLEAN_VERSION}-all-platforms.tar.gz" -C final_package .
+        TARBALL_NAME="sidecar-${CLEAN_VERSION}-all-platforms.tar.gz"
+        tar -czf "${TARBALL_NAME}" -C release_files .
+
+        # 5. 现在所有东西都准备好了，我们创建最终的上传目录
+        mkdir -p final_package
         
-        # 7. 将 README 也复制到【最终成品】目录
+        # 6. 把【零散文件】和【压缩包】全部移动到【最终上传目录】
+        mv release_files/* final_package/
+        mv "${TARBALL_NAME}" final_package/
+        
+        # 7. 将 README 也复制到【最终上传目录】
         if [ -f "README-BINARY.md" ]; then
           cp README-BINARY.md final_package/
         fi
@@ -120,40 +120,35 @@ jobs:
         echo "✅ Final release package prepared:"
         ls -lR final_package/
 
-    - name: 上传最终的发布包 (作为构建产物)
+    - name: 上传最终的发布包
       uses: actions/upload-artifact@v4
       with:
         name: sidecar-release-package
-        path: final_package/ # 只上传这个包含所有成品的目录
+        path: final_package/
         retention-days: 30
 
     - name: 创建 GitHub Release (仅在打标签时触发)
       if: startsWith(github.ref, 'refs/tags/')
       uses: softprops/action-gh-release@v1
       with:
-        # 关键改动: 只上传干净的【最终成品】目录里的所有文件
         files: final_package/*
         body: |
           ## 🎉 Sidecar ${{ github.ref_name }} Release
-          
-          This release contains the bare-metal binaries for Sidecar. 
+          This release contains the bare-metal binaries for Sidecar.
           Download the appropriate binary for your system, or the `.tar.gz` archive containing all platforms.
           
           ### ✅ Verification
-          
           Please verify the integrity of the downloaded files using the `checksums.txt`:
           ```bash
           sha256sum -c checksums.txt
           ```
 
           ### 🚀 Quick Start
-          
           **Linux / macOS:**
           ```bash
           chmod +x ./sidecar-linux-x64
           ./sidecar-linux-x64 --url https://example.com
           ```
-          
           **Windows (CMD/PowerShell):**
           ```cmd
           sidecar-windows-x64.exe --url https://example.com
