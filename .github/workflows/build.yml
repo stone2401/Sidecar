@@ -60,11 +60,10 @@ jobs:
     - name: Rust 缓存
       uses: Swatinem/rust-cache@v2
       with:
-        workspaces: './src-tauri -> target' # 假设你的 Cargo.toml 在 src-tauri 目录
+        workspaces: './src-tauri -> target'
         key: ${{ matrix.target }}
 
     - name: 构建裸二进制文件
-      # 注意：这里是你坚持使用的 cargo build，而不是 tauri build
       shell: bash
       run: |
         cd src-tauri
@@ -73,24 +72,19 @@ jobs:
     - name: 准备并重命名二进制文件
       shell: bash
       run: |
-        # 创建一个临时目录存放准备好的文件
         mkdir -p ./artifact
-
-        # 定义源路径和目标路径
-        APP_NAME="sidecar" # 你程序在 Cargo.toml 中定义的名字
+        APP_NAME="sidecar"
         SOURCE_DIR="src-tauri/target/${{ matrix.target }}/release"
         TARGET_NAME="sidecar-${{ matrix.name }}"
 
-        # 根据操作系统复制和重命名
         if [[ "${{ matrix.os }}" == "windows-latest" ]]; then
           cp "${SOURCE_DIR}/${APP_NAME}.exe" "./artifact/${TARGET_NAME}.exe"
-          echo "✅ Copied Windows binary to artifact/${TARGET_NAME}.exe"
         else
           cp "${SOURCE_DIR}/${APP_NAME}" "./artifact/${TARGET_NAME}"
           chmod +x "./artifact/${TARGET_NAME}"
-          echo "✅ Copied Unix binary to artifact/${TARGET_NAME}"
         fi
         
+        echo "✅ Renamed binary:"
         ls -l ./artifact
 
     - name: 上传单个平台的二进制文件
@@ -114,7 +108,7 @@ jobs:
     - name: 下载所有构建好的二进制文件
       uses: actions/download-artifact@v4
       with:
-        path: all-binaries/ # 下载到统一的目录
+        path: all-binaries/
         pattern: sidecar-binary-*
         merge-multiple: true
 
@@ -132,18 +126,16 @@ jobs:
         sha256sum sidecar-* > checksums.txt
         cd ..
         
-        # 4. 创建一个包含所有二进制文件和校验和的压缩包
+        # 4. 创建包含所有内容的压缩包 (在准备区之外创建)
         VERSION="${GITHUB_REF_NAME:-latest}"
-        # 清理版本号中的 'v' (例如 v1.2.3 -> 1.2.3)
         CLEAN_VERSION=$(echo "$VERSION" | sed 's/^v//')
-        tar -czf "release_assets/sidecar-${CLEAN_VERSION}-all-platforms.tar.gz" -C release_assets .
+        # ✅ *** 这是修正后的关键行 ***
+        tar -czf "sidecar-${CLEAN_VERSION}-all-platforms.tar.gz" -C release_assets .
         
-        # 5. 将你的说明文档也复制到准备区
-        # 注意: 确保你的仓库里有这个 README-BINARY.md 文件
+        # 5. 将最终的压缩包和说明文档也移动到准备区，以便统一上传
+        mv "sidecar-${CLEAN_VERSION}-all-platforms.tar.gz" release_assets/
         if [ -f "README-BINARY.md" ]; then
           cp README-BINARY.md release_assets/
-        else
-          echo "Warning: README-BINARY.md not found."
         fi
         
         echo "✅ Release assets prepared:"
@@ -160,7 +152,6 @@ jobs:
       if: startsWith(github.ref, 'refs/tags/')
       uses: softprops/action-gh-release@v1
       with:
-        # 关键改动: 只上传干净的发布准备区里的所有文件
         files: release_assets/*
         body: |
           ## 🎉 Sidecar ${{ github.ref_name }} Release
@@ -191,4 +182,3 @@ jobs:
         prerelease: false
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
