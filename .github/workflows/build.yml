@@ -13,9 +13,6 @@ env:
   RUST_BACKTRACE: 1
 
 jobs:
-  # ===================================================================
-  # 步骤 1: 构建 (无变化)
-  # ===================================================================
   build:
     strategy:
       fail-fast: false
@@ -70,12 +67,15 @@ jobs:
       uses: actions/upload-artifact@v4
       with: { name: "sidecar-binary-${{ matrix.name }}", path: ./artifact/, retention-days: 7 }
 
-  # ===================================================================
-  # 步骤 2: (已彻底修正) 合并二进制文件并准备发布包
-  # ===================================================================
   merge_and_release:
     needs: build
     runs-on: ubuntu-latest
+    
+    # ===================================================================
+    # 核心修正: 授予创建 Release 的权限
+    # ===================================================================
+    permissions:
+      contents: write
     
     steps:
     - name: 检出代码 (用于获取 README)
@@ -88,35 +88,21 @@ jobs:
     - name: 整理文件并创建发布包
       id: prep_release
       run: |
-        # 1. 创建用于存放【零散文件】的目录
         mkdir -p release_files
-        
-        # 2. 使用 find 将所有二进制文件移动到【零散文件】目录
         find ./all-binaries -type f -exec mv {} ./release_files/ \;
-        
-        # 3. 在【零散文件】目录内生成校验和
         cd release_files
         sha256sum sidecar-* > checksums.txt
-        cd .. # 返回工作区根目录
-
-        # 4. ✅ 【核心修正】创建压缩包，但【输出在当前目录】，【源头是 release_files】
+        cd ..
         VERSION="${GITHUB_REF_NAME:-latest}"
         CLEAN_VERSION=$(echo "$VERSION" | sed 's/^v//')
         TARBALL_NAME="sidecar-${CLEAN_VERSION}-all-platforms.tar.gz"
         tar -czf "${TARBALL_NAME}" -C release_files .
-
-        # 5. 现在所有东西都准备好了，我们创建最终的上传目录
         mkdir -p final_package
-        
-        # 6. 把【零散文件】和【压缩包】全部移动到【最终上传目录】
         mv release_files/* final_package/
         mv "${TARBALL_NAME}" final_package/
-        
-        # 7. 将 README 也复制到【最终上传目录】
         if [ -f "README-BINARY.md" ]; then
           cp README-BINARY.md final_package/
         fi
-        
         echo "✅ Final release package prepared:"
         ls -lR final_package/
 
