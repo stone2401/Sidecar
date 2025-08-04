@@ -1,4 +1,4 @@
-name: 构建二进制文件
+name: 构建和发布 Sidecar
 
 on:
   push:
@@ -13,24 +13,23 @@ env:
   RUST_BACKTRACE: 1
 
 jobs:
+  # ===================================================================
+  # 步骤 1: 在各个平台上构建独立的二进制文件
+  # ===================================================================
   build:
     strategy:
       fail-fast: false
       matrix:
         include:
-          # 使用 Ubuntu 24.04 以获得 webkit2gtk-4.1 支持
           - os: ubuntu-24.04
             target: x86_64-unknown-linux-gnu
             name: linux-x64
-            
           - os: windows-latest
             target: x86_64-pc-windows-msvc
             name: windows-x64
-            
           - os: macos-latest
             target: x86_64-apple-darwin
             name: macos-intel
-            
           - os: macos-latest
             target: aarch64-apple-darwin
             name: macos-arm64
@@ -41,310 +40,155 @@ jobs:
     - name: 检出代码
       uses: actions/checkout@v4
 
-    - name: 安装 Rust
+    - name: 安装 Rust 工具链
       uses: dtolnay/rust-toolchain@stable
       with:
         targets: ${{ matrix.target }}
 
-    # Ubuntu 24.04 依赖
-    - name: 安装系统依赖 (Ubuntu 24.04)
+    - name: 安装系统依赖 (Ubuntu)
       if: matrix.os == 'ubuntu-24.04'
       run: |
-        echo "=== 系统信息 ==="
-        lsb_release -a
-        
-        echo "=== 更新包列表 ==="
         sudo apt-get update
-        
-        echo "=== 安装 Tauri 依赖 ==="
         sudo apt-get install -y \
           libwebkit2gtk-4.1-dev \
           libjavascriptcoregtk-4.1-dev \
           libgtk-3-dev \
           libayatana-appindicator3-dev \
           librsvg2-dev \
-          patchelf \
-          pkg-config \
-          libssl-dev \
-          build-essential \
-          curl \
-          wget \
-          file
-        
-        echo "=== 验证依赖安装 ==="
-        pkg-config --modversion webkit2gtk-4.1 || echo "webkit2gtk-4.1 未找到"
-        pkg-config --modversion javascriptcoregtk-4.1 || echo "javascriptcoregtk-4.1 未找到"
-        pkg-config --modversion gtk+-3.0 || echo "gtk+-3.0 未找到"
-        
-        echo "=== 显示所有 webkit 相关包 ==="
-        pkg-config --list-all | grep -i webkit || true
+          build-essential
 
     - name: Rust 缓存
       uses: Swatinem/rust-cache@v2
       with:
-        workspaces: './src-tauri -> target'
+        workspaces: './src-tauri -> target' # 假设你的 Cargo.toml 在 src-tauri 目录
         key: ${{ matrix.target }}
 
-    # 准备构建环境 - Unix
-    - name: 准备构建环境 (Unix)
-      if: matrix.os != 'windows-latest'
-      shell: bash
-      run: |
-        mkdir -p empty_dist
-        echo "<!DOCTYPE html><html><body></body></html>" > empty_dist/index.html
-        
-        echo "=== 项目结构 ==="
-        ls -la
-        if [ -d "src-tauri" ]; then
-          echo "=== src-tauri 内容 ==="
-          ls -la src-tauri/
-        fi
-
-    # 准备构建环境 - Windows
-    - name: 准备构建环境 (Windows)
-      if: matrix.os == 'windows-latest'
-      shell: pwsh
-      run: |
-        if (-not (Test-Path "empty_dist")) {
-          New-Item -ItemType Directory -Path "empty_dist" -Force
-        }
-        '<!DOCTYPE html><html><body></body></html>' | Out-File -FilePath "empty_dist\index.html" -Encoding UTF8
-        
-        Write-Host "=== 项目结构 ==="
-        Get-ChildItem -Force
-        if (Test-Path "src-tauri") {
-          Write-Host "=== src-tauri 内容 ==="
-          Get-ChildItem "src-tauri" -Force
-        }
-
-    # 构建 - Unix
-    - name: 构建 (Unix)
-      if: matrix.os != 'windows-latest'
+    - name: 构建裸二进制文件
+      # 注意：这里是你坚持使用的 cargo build，而不是 tauri build
       shell: bash
       run: |
         cd src-tauri
-        
-        # Ubuntu 特殊环境变量
-        if [[ "${{ matrix.os }}" == "ubuntu-24.04" ]]; then
-          export WEBKIT_DISABLE_COMPOSITING_MODE=1
-          export PKG_CONFIG_PATH="/usr/lib/x86_64-linux-gnu/pkgconfig:/usr/share/pkgconfig:$PKG_CONFIG_PATH"
-          echo "PKG_CONFIG_PATH=$PKG_CONFIG_PATH"
-        fi
-        
-        echo "=== 开始构建 ${{ matrix.target }} ==="
         cargo build --release --target ${{ matrix.target }} --verbose
-        
-        echo "=== 构建完成，检查输出 ==="
-        ls -la target/${{ matrix.target }}/release/
 
-    # 构建 - Windows
-    - name: 构建 (Windows)
-      if: matrix.os == 'windows-latest'
-      shell: pwsh
-      run: |
-        cd src-tauri
-        
-        Write-Host "=== 开始构建 ${{ matrix.target }} ==="
-        cargo build --release --target ${{ matrix.target }} --verbose
-        
-        Write-Host "=== 构建完成，检查输出 ==="
-        Get-ChildItem "target\${{ matrix.target }}\release\"
-
-    # 收集二进制文件 - Unix
-    - name: 准备上传 (Unix)
-      if: matrix.os != 'windows-latest'
+    - name: 准备并重命名二进制文件
       shell: bash
       run: |
-        BINARY_PATH="src-tauri/target/${{ matrix.target }}/release/gui"
-        
-        if [ -f "$BINARY_PATH" ]; then
-          cp "$BINARY_PATH" "gui-${{ matrix.name }}"
-          chmod +x "gui-${{ matrix.name }}"
-          
-          # 获取文件信息
-          echo "✅ 二进制文件准备完成"
-          ls -lh "gui-${{ matrix.name }}"
-          file "gui-${{ matrix.name }}"
-          
-          # Linux 特定：显示依赖信息
-          if [[ "${{ matrix.os }}" == "ubuntu-24.04" ]]; then
-            echo "=== 动态库依赖 ==="
-            ldd "gui-${{ matrix.name }}" || true
-          fi
+        # 创建一个临时目录存放准备好的文件
+        mkdir -p ./artifact
+
+        # 定义源路径和目标路径
+        APP_NAME="sidecar" # 你程序在 Cargo.toml 中定义的名字
+        SOURCE_DIR="src-tauri/target/${{ matrix.target }}/release"
+        TARGET_NAME="sidecar-${{ matrix.name }}"
+
+        # 根据操作系统复制和重命名
+        if [[ "${{ matrix.os }}" == "windows-latest" ]]; then
+          cp "${SOURCE_DIR}/${APP_NAME}.exe" "./artifact/${TARGET_NAME}.exe"
+          echo "✅ Copied Windows binary to artifact/${TARGET_NAME}.exe"
         else
-          echo "❌ 未找到二进制文件: $BINARY_PATH"
-          echo "target 目录内容："
-          find src-tauri/target -type f -name "gui*" || true
-          exit 1
+          cp "${SOURCE_DIR}/${APP_NAME}" "./artifact/${TARGET_NAME}"
+          chmod +x "./artifact/${TARGET_NAME}"
+          echo "✅ Copied Unix binary to artifact/${TARGET_NAME}"
         fi
-
-    # 收集二进制文件 - Windows
-    - name: 准备上传 (Windows)
-      if: matrix.os == 'windows-latest'
-      shell: pwsh
-      run: |
-        $binaryPath = "src-tauri\target\${{ matrix.target }}\release\gui.exe"
         
-        if (Test-Path $binaryPath) {
-          Copy-Item $binaryPath "gui-${{ matrix.name }}.exe"
-          
-          Write-Host "✅ 二进制文件准备完成"
-          Get-Item "gui-${{ matrix.name }}.exe" | Select-Object Name, Length, LastWriteTime
-          
-          # 检查是否有 DLL 依赖
-          $dllPath = Split-Path $binaryPath -Parent
-          $dlls = Get-ChildItem "$dllPath\*.dll" -ErrorAction SilentlyContinue
-          if ($dlls) {
-            Write-Host "=== DLL 依赖 ==="
-            $dlls | ForEach-Object { Write-Host $_.Name }
-          }
-        } else {
-          Write-Error "❌ 未找到二进制文件: $binaryPath"
-          Write-Host "target 目录内容："
-          Get-ChildItem "src-tauri\target" -Recurse -Filter "gui*"
-          exit 1
-        }
+        ls -l ./artifact
 
-    # 上传单个二进制文件
-    - name: 上传二进制文件
+    - name: 上传单个平台的二进制文件
       uses: actions/upload-artifact@v4
       with:
-        name: gui-${{ matrix.name }}
-        path: gui-${{ matrix.name }}*
-        retention-days: 30
+        name: sidecar-binary-${{ matrix.name }}
+        path: ./artifact/
+        retention-days: 7
 
-  # 合并所有二进制文件
-  merge:
+  # ===================================================================
+  # 步骤 2: 合并所有二进制文件并准备发布包
+  # ===================================================================
+  merge_and_release:
     needs: build
     runs-on: ubuntu-latest
     
     steps:
-    - name: 下载所有二进制文件
+    - name: 检出代码 (用于获取 README)
+      uses: actions/checkout@v4
+
+    - name: 下载所有构建好的二进制文件
       uses: actions/download-artifact@v4
       with:
-        path: binaries
-        pattern: gui-*
+        path: all-binaries/ # 下载到统一的目录
+        pattern: sidecar-binary-*
         merge-multiple: true
 
-    - name: 显示所有文件
+    - name: 整理文件并创建发布包
+      id: prep_release
       run: |
-        echo "=== 所有二进制文件 ==="
-        ls -lah binaries/
+        # 1. 创建一个干净的发布准备区
+        mkdir -p release_assets
         
-        echo -e "\n=== 文件类型信息 ==="
-        file binaries/gui-* || true
+        # 2. 将所有下载的二进制文件移动到准备区
+        mv all-binaries/* release_assets/
         
-        echo -e "\n=== SHA256 校验和 ==="
-        cd binaries
-        sha256sum gui-* | tee checksums.txt
-
-    - name: 创建发布包
-      run: |
-        cd binaries
-        
-        # 创建带版本号的压缩包
-        VERSION="${GITHUB_REF_NAME:-latest}"
-        tar -czf "../gui-${VERSION}-all-platforms.tar.gz" gui-* checksums.txt
-        
-        # 创建 README
-        cat > ../README-BINARY.md << 'EOF'
-        # GUI 二进制文件
-        
-        ## 文件说明
-        - `gui-linux-x64` - Linux x64 二进制文件
-        - `gui-windows-x64.exe` - Windows x64 可执行文件
-        - `gui-macos-intel` - macOS Intel 二进制文件
-        - `gui-macos-arm64` - macOS Apple Silicon 二进制文件
-        - `checksums.txt` - SHA256 校验和
-        
-        ## 使用方法
-        
-        ### Linux/macOS
-        ```bash
-        chmod +x gui-*
-        ./gui-linux-x64 --url https://example.com
-        ```
-        
-        ### Windows
-        ```cmd
-        gui-windows-x64.exe --url https://example.com
-        ```
-        
-        ## 依赖说明
-        - Linux: 需要 GTK3 和 WebKitGTK
-        - Windows: 需要 WebView2 Runtime
-        - macOS: 无额外依赖
-        EOF
-        
+        # 3. 在准备区内生成校验和文件
+        cd release_assets
+        sha256sum sidecar-* > checksums.txt
         cd ..
-        ls -lah gui-*.tar.gz README-BINARY.md
+        
+        # 4. 创建一个包含所有二进制文件和校验和的压缩包
+        VERSION="${GITHUB_REF_NAME:-latest}"
+        # 清理版本号中的 'v' (例如 v1.2.3 -> 1.2.3)
+        CLEAN_VERSION=$(echo "$VERSION" | sed 's/^v//')
+        tar -czf "release_assets/sidecar-${CLEAN_VERSION}-all-platforms.tar.gz" -C release_assets .
+        
+        # 5. 将你的说明文档也复制到准备区
+        # 注意: 确保你的仓库里有这个 README-BINARY.md 文件
+        if [ -f "README-BINARY.md" ]; then
+          cp README-BINARY.md release_assets/
+        else
+          echo "Warning: README-BINARY.md not found."
+        fi
+        
+        echo "✅ Release assets prepared:"
+        ls -lR release_assets/
 
-    - name: 上传合并包
+    - name: 上传最终的发布包 (作为构建产物)
       uses: actions/upload-artifact@v4
       with:
-        name: gui-all-platforms
-        path: |
-          binaries/gui-*
-          gui-*.tar.gz
-          README-BINARY.md
+        name: sidecar-release-package
+        path: release_assets/
         retention-days: 30
 
-    # 创建 Release（仅在打标签时）
-    - name: 创建 Release
+    - name: 创建 GitHub Release (仅在打标签时触发)
       if: startsWith(github.ref, 'refs/tags/')
       uses: softprops/action-gh-release@v1
       with:
-        files: |
-          binaries/gui-*
-          gui-*.tar.gz
-          binaries/checksums.txt
+        # 关键改动: 只上传干净的发布准备区里的所有文件
+        files: release_assets/*
         body: |
-          ## 🎉 GUI ${{ github.ref_name }} 发布
+          ## 🎉 Sidecar ${{ github.ref_name }} Release
           
-          ### 📦 下载文件
+          This release contains the bare-metal binaries for Sidecar. 
+          Download the appropriate binary for your system, or the `.tar.gz` archive containing all platforms.
           
-          #### 单独平台文件
-          - **Linux x64**: `gui-linux-x64`
-          - **Windows x64**: `gui-windows-x64.exe`
-          - **macOS Intel**: `gui-macos-intel`
-          - **macOS Apple Silicon**: `gui-macos-arm64`
+          ### ✅ Verification
           
-          #### 全平台打包
-          - `gui-${{ github.ref_name }}-all-platforms.tar.gz` - 包含所有平台二进制文件
-          
-          ### 🚀 快速开始
-          
-          1. 下载对应平台的文件
-          2. 添加执行权限（Unix/macOS）：
-             ```bash
-             chmod +x gui-*
-             ```
-          3. 运行应用：
-             ```bash
-             # 使用默认 URL
-             ./gui-linux-x64
-             
-             # 指定自定义 URL
-             ./gui-linux-x64 --url https://your-app.com
-             ```
-          
-          ### ✅ 文件校验
-          
-          请使用 `checksums.txt` 验证下载文件的完整性：
+          Please verify the integrity of the downloaded files using the `checksums.txt`:
           ```bash
           sha256sum -c checksums.txt
           ```
+
+          ### 🚀 Quick Start
           
-          ### 📋 系统要求
+          **Linux / macOS:**
+          ```bash
+          chmod +x ./sidecar-linux-x64
+          ./sidecar-linux-x64 --url https://example.com
+          ```
           
-          - **Linux**: Ubuntu 20.04+ 或其他支持 GTK3 的发行版
-          - **Windows**: Windows 10 1809+ (需要 WebView2 Runtime)
-          - **macOS**: macOS 10.13+
-          
-          ### 🐛 问题反馈
-          
-          如有问题请在 [Issues](https://github.com/${{ github.repository }}/issues) 中反馈。
+          **Windows (CMD/PowerShell):**
+          ```cmd
+          sidecar-windows-x64.exe --url https://example.com
+          ```
         draft: false
         prerelease: false
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+

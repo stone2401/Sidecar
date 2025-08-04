@@ -1,8 +1,8 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "gui",
+  "productName": "sidecar",
   "version": "0.1.0",
-  "identifier": "com.gui.desktop",
+  "identifier": "com.sidecar.desktop",
   "build": {
     "beforeDevCommand": "",
     "devUrl": "http://localhost:1420",
