@@ -14,7 +14,7 @@ env:
 
 jobs:
   # ===================================================================
-  # 步骤 1: 在各个平台上构建独立的二进制文件
+  # 步骤 1: 构建独立的二进制文件 (此部分无变化)
   # ===================================================================
   build:
     strategy:
@@ -27,75 +27,53 @@ jobs:
           - os: windows-latest
             target: x86_64-pc-windows-msvc
             name: windows-x64
-          - os: macos-latest
+          - os: macos-15
             target: x86_64-apple-darwin
             name: macos-intel
-          - os: macos-latest
+          - os: macos-15
             target: aarch64-apple-darwin
             name: macos-arm64
 
     runs-on: ${{ matrix.os }}
-
     steps:
     - name: 检出代码
       uses: actions/checkout@v4
-
     - name: 安装 Rust 工具链
       uses: dtolnay/rust-toolchain@stable
-      with:
-        targets: ${{ matrix.target }}
-
+      with: { targets: "${{ matrix.target }}" }
     - name: 安装系统依赖 (Ubuntu)
       if: matrix.os == 'ubuntu-24.04'
       run: |
         sudo apt-get update
-        sudo apt-get install -y \
-          libwebkit2gtk-4.1-dev \
-          libjavascriptcoregtk-4.1-dev \
-          libgtk-3-dev \
-          libayatana-appindicator3-dev \
-          librsvg2-dev \
-          build-essential
-
+        sudo apt-get install -y libwebkit2gtk-4.1-dev libjavascriptcoregtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev librsvg2-dev build-essential
     - name: Rust 缓存
       uses: Swatinem/rust-cache@v2
-      with:
-        workspaces: './src-tauri -> target'
-        key: ${{ matrix.target }}
-
+      with: { workspaces: './src-tauri -> target', key: "${{ matrix.target }}" }
     - name: 构建裸二进制文件
       shell: bash
       run: |
         cd src-tauri
         cargo build --release --target ${{ matrix.target }} --verbose
-
     - name: 准备并重命名二进制文件
       shell: bash
       run: |
         mkdir -p ./artifact
-        APP_NAME="sidecar"
+        APP_NAME="sidecar" # 确保这是你 Cargo.toml 中的 [package].name
         SOURCE_DIR="src-tauri/target/${{ matrix.target }}/release"
         TARGET_NAME="sidecar-${{ matrix.name }}"
-
         if [[ "${{ matrix.os }}" == "windows-latest" ]]; then
           cp "${SOURCE_DIR}/${APP_NAME}.exe" "./artifact/${TARGET_NAME}.exe"
         else
           cp "${SOURCE_DIR}/${APP_NAME}" "./artifact/${TARGET_NAME}"
           chmod +x "./artifact/${TARGET_NAME}"
         fi
-        
-        echo "✅ Renamed binary:"
         ls -l ./artifact
-
     - name: 上传单个平台的二进制文件
       uses: actions/upload-artifact@v4
-      with:
-        name: sidecar-binary-${{ matrix.name }}
-        path: ./artifact/
-        retention-days: 7
+      with: { name: "sidecar-binary-${{ matrix.name }}", path: ./artifact/, retention-days: 7 }
 
   # ===================================================================
-  # 步骤 2: 合并所有二进制文件并准备发布包
+  # 步骤 2: (已修正) 合并二进制文件并准备发布包
   # ===================================================================
   merge_and_release:
     needs: build
@@ -107,52 +85,54 @@ jobs:
 
     - name: 下载所有构建好的二进制文件
       uses: actions/download-artifact@v4
-      with:
-        path: all-binaries/
-        pattern: sidecar-binary-*
-        merge-multiple: true
+      with: { path: all-binaries/ } # 只指定根目录
 
     - name: 整理文件并创建发布包
       id: prep_release
       run: |
-        # 1. 创建一个干净的发布准备区
-        mkdir -p release_assets
+        # 1. 创建一个用于存放【零散文件】的干净目录
+        mkdir -p release_files
         
-        # 2. 将所有下载的二进制文件移动到准备区
-        mv all-binaries/* release_assets/
+        # 2. ✅ 【核心修正】使用 find 命令，忽略目录层级，直接将所有二进制文件移动到准备区
+        find ./all-binaries -type f -exec mv {} ./release_files/ \;
         
-        # 3. 在准备区内生成校验和文件
-        cd release_assets
+        # 3. 在【零散文件】目录内生成校验和
+        cd release_files
         sha256sum sidecar-* > checksums.txt
         cd ..
         
-        # 4. 创建包含所有内容的压缩包 (在准备区之外创建)
+        # 4. 创建一个用于存放【最终成品】的目录
+        mkdir -p final_package
+        
+        # 5. 将【零散文件】目录里的所有东西，都移动到【最终成品】目录
+        mv release_files/* final_package/
+        
+        # 6. 创建包含所有零散文件的压缩包，并直接放在【最终成品】目录里
         VERSION="${GITHUB_REF_NAME:-latest}"
         CLEAN_VERSION=$(echo "$VERSION" | sed 's/^v//')
-        # ✅ *** 这是修正后的关键行 ***
-        tar -czf "sidecar-${CLEAN_VERSION}-all-platforms.tar.gz" -C release_assets .
+        tar -czf "final_package/sidecar-${CLEAN_VERSION}-all-platforms.tar.gz" -C final_package .
         
-        # 5. 将最终的压缩包和说明文档也移动到准备区，以便统一上传
-        mv "sidecar-${CLEAN_VERSION}-all-platforms.tar.gz" release_assets/
+        # 7. 将 README 也复制到【最终成品】目录
         if [ -f "README-BINARY.md" ]; then
-          cp README-BINARY.md release_assets/
+          cp README-BINARY.md final_package/
         fi
         
-        echo "✅ Release assets prepared:"
-        ls -lR release_assets/
+        echo "✅ Final release package prepared:"
+        ls -lR final_package/
 
     - name: 上传最终的发布包 (作为构建产物)
       uses: actions/upload-artifact@v4
       with:
         name: sidecar-release-package
-        path: release_assets/
+        path: final_package/ # 只上传这个包含所有成品的目录
         retention-days: 30
 
     - name: 创建 GitHub Release (仅在打标签时触发)
       if: startsWith(github.ref, 'refs/tags/')
       uses: softprops/action-gh-release@v1
       with:
-        files: release_assets/*
+        # 关键改动: 只上传干净的【最终成品】目录里的所有文件
+        files: final_package/*
         body: |
           ## 🎉 Sidecar ${{ github.ref_name }} Release
           
