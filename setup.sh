@@ -1,6 +1,6 @@
 #!/bin/bash
 
-echo "🚀 设置 GUI 项目环境"
+echo "🚀 设置 Sidecar 项目环境"
 
 # 创建必要目录
 mkdir -p empty_dist

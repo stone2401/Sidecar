@@ -1,6 +1,6 @@
 #!/bin/bash
 
-echo "🚀 构建 GUI 二进制文件（极简版）"
+echo "🚀 构建 Sidecar 二进制文件（极简版）"
 
 # 准备环境
 mkdir -p empty_dist

@@ -6,7 +6,8 @@
   "scripts": {
     "dev": "tauri dev",
     "build": "tauri build",
-    "tauri": "tauri"
+    "tauri": "tauri",
+    "start": "vite dev"
   },
   "dependencies": {
     "@tauri-apps/api": "^2",

@@ -5,7 +5,7 @@
   "identifier": "com.sidecar.desktop",
   "build": {
     "beforeDevCommand": "",
-    "devUrl": "http://localhost:1420",
+    "devUrl": "https://tauri.app",
     "beforeBuildCommand": "",
     "frontendDist": "../empty_dist"
   },

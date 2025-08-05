@@ -77,9 +77,9 @@ pnpm run tauri build -- --target x86_64-unknown-linux-gnu
 
 ```
 src-tauri/target/[target]/release/
-├── gui.exe        # Windows 便携版可执行文件
-├── gui.app/       # macOS 便携版应用包
-└── gui            # Linux 便携版可执行文件
+├── sidecar.exe        # Windows 便携版可执行文件
+├── sidecar.app/       # macOS 便携版应用包
+└── sidecar            # Linux 便携版可执行文件
 ```
 
 **注意**: 便携版应用无需安装，可直接运行。
